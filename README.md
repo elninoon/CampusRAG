@@ -51,6 +51,17 @@ python scripts\build_index.py --reset
 
 爬虫只保存公开 HTML 详情页，会跳过需要统一身份认证的页面和 PDF 等附件。
 
+提取单个公开网页并保存为 Markdown：
+
+```powershell
+python scripts\ingest_webpage.py "https://www.ecnu.edu.cn/wzcd/xxgk/xqjj.htm" `
+  --department "华东师范大学" --category "学校概况"
+python scripts\build_index.py
+```
+
+应传入包含正文的具体页面，而不是只有链接的栏目目录页。如果自动识别不到正文，
+可以通过 `--selector ".正文容器类名"` 指定 CSS 选择器。
+
 首次需要从头重建索引时：
 
 ```powershell
@@ -79,6 +90,27 @@ python -m streamlit run app.py
 python scripts\search.py "奖学金材料什么时候提交" --year 2026 --category 奖学金
 ```
 
+排查错误回答时，查看向量召回、BM25、RRF 融合和 Rerank 的完整链路：
+
+```powershell
+python scripts\trace_query.py "华东师范大学的副校长是谁"
+```
+
+## MCP 工具服务
+
+CampusRAG 可以作为 MCP Server 暴露给外部 Agent，例如 CampusOps Agent。启动方式：
+
+```powershell
+python scripts\mcp_server.py
+```
+
+当前暴露两个工具：
+
+- `campus_rag_search`：执行向量检索 + BM25 + RRF 融合，只返回检索证据，不调用 reranker 或 LLM。
+- `campus_rag_ask`：执行完整 RAGPipeline，返回受资料约束的回答、来源和引用校验结果。
+
+工具参数支持 `year`、`category`、`department` 等 metadata 过滤。推荐在 Agent 里优先用 `campus_rag_search` 查证据；需要完整自然语言回答时再调用 `campus_rag_ask`。
+
 ## 数据格式
 
 Markdown 和 TXT 文件可在正文前使用 YAML frontmatter。以下字段会进入检索过滤和来源展示：
@@ -95,7 +127,25 @@ year: 2026
 正文内容。
 ```
 
-原始文件放在 `data/raw` 的任意子目录。PDF、DOCX 和 HTML 同样会被解析，但其元数据需要在后续数据接入时补充。
+原始文件放在 `data/raw` 的任意子目录。PDF、DOCX 和 HTML 会直接解析，无需先转换为 Markdown。
+
+非 Markdown 文件可以通过同名 `.meta.yaml` sidecar 补充元数据。例如：
+
+```text
+data/raw/yjsy/2026全日制研究生手册.pdf
+data/raw/yjsy/2026全日制研究生手册.meta.yaml
+```
+
+sidecar 内容：
+
+```yaml
+title: 2026全日制研究生手册
+department: 华东师范大学研究生院
+category: 研究生手册
+year: 2026
+```
+
+`source_path`、`format` 和 `document_id` 由解析器自动生成。PDF 会优先提取文本层；如果整份文件几乎没有可提取文字，则自动尝试 Tesseract OCR。扫描版中文 PDF 需要系统安装 Tesseract 及 `chi_sim` 中文语言包。
 
 ## 评测与测试
 
@@ -120,6 +170,7 @@ config.py                 模型、路径和环境变量配置
 data/raw/                 原始校园资料
 data/eval/                检索评测样本
 src/parser.py             多格式文档解析
+src/web_ingestor.py       通用单网页正文提取与 Markdown 入库
 src/chunker.py            文档切分
 src/embeddings.py         Embedding API 客户端
 src/indexer.py            Chroma 索引构建
@@ -129,6 +180,7 @@ src/generator.py          受约束回答生成
 src/citations.py          引用编号校验
 src/evaluator.py          Hit@K 评测
 src/pipeline.py           端到端问答入口
+src/mcp_server.py         CampusRAG MCP 工具服务
 scripts/                  建库、检索、问答和评测命令
 tests/                    不依赖外部 API 的单元测试
 ```

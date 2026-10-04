@@ -1,8 +1,10 @@
 """阶段 3：把切分后的文档写入本地 Chroma 向量库。"""
 import hashlib
 import json
+import time
 from dataclasses import dataclass
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from config import Settings, get_settings
@@ -13,6 +15,7 @@ from src.schema import Document
 
 
 COLLECTION_NAME = "campus_documents"
+INDEX_VERSION_FILE = ".index_version"
 
 
 @dataclass(frozen=True)
@@ -90,6 +93,9 @@ class IndexBuilder:
                 metadatas=[_chroma_metadata(chunk.metadata) for chunk in batch],
                 embeddings=vectors,
             )
+
+        version_path = Path(self.settings.index_dir) / INDEX_VERSION_FILE
+        version_path.write_text(str(time.time_ns()), encoding="ascii")
 
         return IndexResult(
             document_count=len(docs),

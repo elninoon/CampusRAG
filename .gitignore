@@ -6,3 +6,6 @@ venv/
 chroma_db/
 *.db
 .DS_Store
+面经.md
+INTERVIEW_GUIDE.md
+PY_FILES.md

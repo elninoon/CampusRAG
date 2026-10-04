@@ -20,6 +20,13 @@ class SearchResult:
     bm25_rank: int | None
 
 
+@dataclass(frozen=True)
+class RetrievalTrace:
+    vector_results: List[SearchResult]
+    bm25_results: List[SearchResult]
+    fused_results: List[SearchResult]
+
+
 def _tokenize(text: str) -> List[str]:
     """为中英文混合校园文本生成轻量 BM25 词项。
 
@@ -124,6 +131,23 @@ class HybridRetriever:
         bm25_k: int = 20,
     ) -> List[SearchResult]:
         """执行两路召回并返回 RRF 融合后的结果。"""
+        return self.search_with_trace(
+            query,
+            top_k=top_k,
+            filters=filters,
+            vector_k=vector_k,
+            bm25_k=bm25_k,
+        ).fused_results
+
+    def search_with_trace(
+        self,
+        query: str,
+        top_k: int = 5,
+        filters: Mapping[str, Any] | None = None,
+        vector_k: int = 20,
+        bm25_k: int = 20,
+    ) -> RetrievalTrace:
+        """执行混合召回，并保留每一路的中间结果供诊断。"""
         if not query.strip():
             raise ValueError("查询不能为空。")
         if top_k < 1 or vector_k < 1 or bm25_k < 1:
@@ -131,7 +155,8 @@ class HybridRetriever:
         active_filters = dict(filters or {})
         vector_results = self._vector_search(query, vector_k, active_filters)
         bm25_results = self._bm25_search(query, bm25_k, active_filters)
-        return _rrf_fuse(vector_results, bm25_results, top_k)
+        fused_results = _rrf_fuse(vector_results, bm25_results, top_k)
+        return RetrievalTrace(vector_results, bm25_results, fused_results)
 
     def _vector_search(
         self,
@@ -146,19 +171,24 @@ class HybridRetriever:
             query_embeddings=[self.embedder.embed_query(query)],
             n_results=min(limit, count),
             where=dict(filters) or None,
-            include=["documents", "metadatas"],
+            include=["documents", "metadatas", "distances"],
         )
         return [
             SearchResult(
                 chunk_id=chunk_id,
                 text=document,
                 metadata=metadata or {},
-                score=0.0,
+                score=1.0 - float(distance),
                 vector_rank=rank,
                 bm25_rank=None,
             )
-            for rank, (chunk_id, document, metadata) in enumerate(
-                zip(response["ids"][0], response["documents"][0], response["metadatas"][0]),
+            for rank, (chunk_id, document, metadata, distance) in enumerate(
+                zip(
+                    response["ids"][0],
+                    response["documents"][0],
+                    response["metadatas"][0],
+                    response["distances"][0],
+                ),
                 start=1,
             )
         ]
@@ -177,7 +207,16 @@ class HybridRetriever:
                 break
             record = self._records[index]
             if _matches_filters(record.metadata, filters):
-                results.append(record)
+                results.append(
+                    SearchResult(
+                        chunk_id=record.chunk_id,
+                        text=record.text,
+                        metadata=record.metadata,
+                        score=float(scores[index]),
+                        vector_rank=None,
+                        bm25_rank=len(results) + 1,
+                    )
+                )
             if len(results) == limit:
                 break
         return results

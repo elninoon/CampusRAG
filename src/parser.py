@@ -20,6 +20,7 @@ frontmatter 里，结构完全一样。
 """
 import os
 import re
+from pathlib import Path
 from typing import List, Tuple
 
 from src.schema import Document
@@ -52,6 +53,22 @@ def _parse_frontmatter(text: str) -> Tuple[dict, str]:
     return meta, body
 
 
+def _load_sidecar_metadata(path: str) -> dict:
+    """读取与源文件同名的 .meta.yaml，例如 handbook.pdf -> handbook.meta.yaml。"""
+    sidecar = Path(path).with_suffix(".meta.yaml")
+    if not sidecar.exists():
+        return {}
+    if yaml is None:
+        raise RuntimeError("读取 metadata sidecar 需要 pyyaml 依赖。")
+    try:
+        payload = yaml.safe_load(sidecar.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"metadata sidecar 格式错误: {sidecar}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"metadata sidecar 必须是 YAML 对象: {sidecar}")
+    return payload
+
+
 def _text_file(path: str) -> Document:
     with open(path, encoding="utf-8") as f:
         text = f.read()
@@ -60,9 +77,26 @@ def _text_file(path: str) -> Document:
 
 
 def _pdf_file(path: str) -> Document:
-    import fitz  # pymupdf
-    doc = fitz.open(path)
-    text = "\n".join(page.get_text() for page in doc)
+    import pymupdf
+    with pymupdf.open(path) as doc:
+        pages = [page.get_text() for page in doc]
+        native_text = "\n".join(pages).strip()
+        visible_chars = len(re.sub(r"\s+", "", native_text))
+        minimum_chars = max(100, len(doc) * 20)
+        if visible_chars >= minimum_chars:
+            return Document(text=native_text, metadata={})
+
+        try:
+            pages = [
+                page.get_text(textpage=page.get_textpage_ocr(language="chi_sim+eng", dpi=200, full=True))
+                for page in doc
+            ]
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"{path} 几乎没有可提取文字，且 OCR 启动失败。"
+                "请安装 Tesseract OCR 及 chi_sim 中文语言包后重试。"
+            ) from exc
+        text = "\n".join(pages)
     return Document(text=text.strip(), metadata={})
 
 
@@ -98,10 +132,11 @@ def load_file(path: str) -> Document:
         raise RuntimeError(
             f"解析 {path} 需要额外依赖，请先安装：{e.name}"
         ) from e
-    # 统一补上来源信息（无论哪种格式都有）
-    doc.metadata.setdefault("source_path", path)
-    doc.metadata.setdefault("format", ext.lstrip("."))
-    doc.metadata.setdefault("document_id", os.path.basename(path))
+    doc.metadata.update(_load_sidecar_metadata(path))
+    # 来源字段由系统维护，不能被 frontmatter 或 sidecar 覆盖。
+    doc.metadata["source_path"] = path
+    doc.metadata["format"] = ext.lstrip(".")
+    doc.metadata["document_id"] = os.path.basename(path)
     return doc
 
 

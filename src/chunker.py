@@ -21,6 +21,7 @@ from src.schema import Document
 LEVEL1 = re.compile(r"^[一二三四五六七八九十]+[、.．]\s*")
 # 二级标题：（一）（二）…
 LEVEL2 = re.compile(r"^[（(][一二三四五六七八九十]+[)）]\s*")
+SPLIT_MARKS = ("\n", "。", "！", "？", "；", ";")
 
 
 def _split_sections(text: str) -> List[Tuple[str, str]]:
@@ -68,6 +69,34 @@ def _sub_split(heading: str, body: str) -> List[Tuple[str, str]]:
     return [(h, b) for h, b in parts if b]
 
 
+def _bounded_parts(text: str, max_chars: int, overlap: int = 80) -> List[str]:
+    """优先在段落或句末切分，并保证每一段都不超过 max_chars。"""
+    if max_chars < 1:
+        raise ValueError("max_chars 太小，无法容纳文档标题和章节标题。")
+    if len(text) <= max_chars:
+        return [text]
+
+    parts: List[str] = []
+    start = 0
+    while start < len(text):
+        hard_end = min(start + max_chars, len(text))
+        end = hard_end
+        if hard_end < len(text):
+            search_start = start + max_chars // 2
+            candidates = [text.rfind(mark, search_start, hard_end) for mark in SPLIT_MARKS]
+            boundary = max(candidates)
+            if boundary >= search_start:
+                end = boundary + 1
+
+        part = text[start:end].strip()
+        if part:
+            parts.append(part)
+        if end >= len(text):
+            break
+        start = max(end - min(overlap, end - start - 1), start + 1)
+    return parts
+
+
 def structured_chunk(doc: Document, max_chars: int = 1200) -> List[Document]:
     """结构化切分：每个 chunk = 文档标题 + 一级标题 + 正文。"""
     title = doc.metadata.get("title") or doc.text.splitlines()[0].strip()
@@ -75,16 +104,17 @@ def structured_chunk(doc: Document, max_chars: int = 1200) -> List[Document]:
     chunks: List[Document] = []
 
     for heading, body in sections:
-        if len(title) + len(heading) + len(body) <= max_chars:
-            chunks.append(Document(
-                text=f"{title}\n\n{heading}\n{body}".strip(),
-                metadata={**doc.metadata, "heading": heading},
-            ))
-        else:
-            for sub_head, sub_body in _sub_split(heading, body):
+        for sub_head, sub_body in _sub_split(heading, body):
+            prefix = f"{title}\n\n{sub_head}\n"
+            body_limit = max_chars - len(prefix)
+            for part_index, part in enumerate(_bounded_parts(sub_body, body_limit)):
                 chunks.append(Document(
-                    text=f"{title}\n\n{sub_head}\n{sub_body}".strip(),
-                    metadata={**doc.metadata, "heading": sub_head},
+                    text=f"{prefix}{part}".strip(),
+                    metadata={
+                        **doc.metadata,
+                        "heading": sub_head,
+                        "section_chunk_index": part_index,
+                    },
                 ))
 
     return chunks

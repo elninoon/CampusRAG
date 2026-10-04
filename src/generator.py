@@ -1,6 +1,6 @@
 """阶段 6：基于带来源的检索上下文生成受约束回答。"""
 from dataclasses import dataclass
-from typing import List, Sequence
+from typing import Any, List, Sequence
 
 from config import LLMConfig
 from src.citations import CitationCheck, validate_citations
@@ -10,7 +10,11 @@ from src.retriever import SearchResult
 SYSTEM_PROMPT = """你是校园信息助手。只可依据提供的资料回答问题。
 资料不足以支持回答时，直接说明“提供的资料不足以回答这个问题”，不要猜测。
 每一个包含事实的信息后都必须标注对应的来源编号，例如 [1]。
-不要编造来源编号，不要把资料中的内容说成最新政策。"""
+不要编造来源编号，不要把资料中的内容说成最新政策。
+当问题询问现任人员、完整名单、数量或当前状态时：
+1. 优先使用官网名录、专门信息页或明确给出完整集合的资料。
+2. 新闻中偶然提到的个别人不能证明完整名单，不可据此回答“只有”该人员。
+3. 如果资料互相冲突，说明冲突；如果没有完整名录，明确说明资料不足。"""
 
 
 @dataclass(frozen=True)
@@ -18,6 +22,7 @@ class GeneratedAnswer:
     text: str
     sources: List[SearchResult]
     citation_check: CitationCheck
+    trace: Any | None = None
 
 
 def build_context(results: Sequence[SearchResult], max_chars: int = 10000) -> str:
