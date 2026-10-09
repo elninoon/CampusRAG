@@ -21,7 +21,7 @@ frontmatter 里，结构完全一样。
 import os
 import re
 from pathlib import Path
-from typing import List, Tuple
+from typing import Callable, List, Tuple
 
 from src.schema import Document
 
@@ -140,11 +140,20 @@ def load_file(path: str) -> Document:
     return doc
 
 
-def load_directory(root: str) -> List[Document]:
-    """递归加载目录下所有支持的文件。"""
+def load_directory(
+    root: str,
+    on_error: Callable[[str, Exception], None] | None = None,
+) -> List[Document]:
+    """递归加载支持的文件；提供 on_error 时跳过失败文件并报告错误。"""
     docs: List[Document] = []
     for dirpath, _, files in os.walk(root):
         for fn in sorted(files):
             if os.path.splitext(fn)[1].lower() in HANDLERS:
-                docs.append(load_file(os.path.join(dirpath, fn)))
+                path = os.path.join(dirpath, fn)
+                try:
+                    docs.append(load_file(path))
+                except Exception as exc:
+                    if on_error is None:
+                        raise
+                    on_error(path, exc)
     return docs

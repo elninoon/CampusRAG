@@ -2,6 +2,7 @@
 import hashlib
 import json
 import time
+import warnings
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -78,7 +79,14 @@ class IndexBuilder:
         chunk_size: int = 500,
         chunk_overlap: int = 50,
     ) -> IndexResult:
-        docs = load_directory(self.settings.data_dir)
+        docs = load_directory(
+            self.settings.data_dir,
+            on_error=lambda path, exc: warnings.warn(
+                f"跳过无法解析的文件 {path}: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            ),
+        )
         return self.build_documents(
             docs,
             strategy=strategy,
