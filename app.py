@@ -5,29 +5,12 @@ from typing import Any, Dict, List
 import streamlit as st
 
 from config import get_settings
-from src.indexer import INDEX_VERSION_FILE
-from src.parser import load_directory
+from src.indexer import COLLECTION_NAME, INDEX_VERSION_FILE
 from src.pipeline import QueryTrace, RAGPipeline
 from src.retriever import SearchResult
 
 
 st.set_page_config(page_title="CampusRAG", page_icon="C", layout="wide")
-
-
-@st.cache_data(show_spinner=False)
-def load_filter_options() -> tuple[Dict[str, List[Any]], List[str]]:
-    """从已有文档提取可选过滤字段，不把筛选项写死在界面里。"""
-    errors: List[str] = []
-    docs = load_directory(
-        get_settings().data_dir,
-        on_error=lambda path, exc: errors.append(f"{path}: {exc}"),
-    )
-    options = {
-        "year": sorted({doc.metadata["year"] for doc in docs if "year" in doc.metadata}, reverse=True),
-        "category": sorted({doc.metadata["category"] for doc in docs if "category" in doc.metadata}),
-        "department": sorted({doc.metadata["department"] for doc in docs if "department" in doc.metadata}),
-    }
-    return options, errors
 
 
 def current_index_version() -> str:
@@ -39,6 +22,35 @@ def current_index_version() -> str:
         return "missing"
     mtimes = [path.stat().st_mtime_ns for path in index_dir.rglob("*") if path.is_file()]
     return str(max(mtimes, default=0))
+
+
+@st.cache_data(show_spinner=False)
+def load_filter_options(index_version: str) -> Dict[str, List[Any]]:
+    """从现有 Chroma 索引元数据提取过滤字段，不重新解析原始文件。"""
+    del index_version  # 参数参与 Streamlit 缓存键，索引更新后刷新过滤选项。
+    settings = get_settings()
+    index_dir = Path(settings.index_dir)
+    options: Dict[str, List[Any]] = {"year": [], "category": [], "department": []}
+    if not index_dir.exists():
+        return options
+
+    import chromadb
+
+    client = chromadb.PersistentClient(path=str(index_dir))
+    collections = {collection.name for collection in client.list_collections()}
+    if COLLECTION_NAME not in collections:
+        return options
+
+    collection = client.get_collection(COLLECTION_NAME)
+    metadata_rows = collection.get(include=["metadatas"]).get("metadatas") or []
+    for key in options:
+        values = {
+            metadata[key]
+            for metadata in metadata_rows
+            if metadata and metadata.get(key) is not None
+        }
+        options[key] = sorted(values, key=str, reverse=(key == "year"))
+    return options
 
 
 @st.cache_resource(show_spinner=False, max_entries=2)
@@ -158,12 +170,7 @@ def main() -> None:
     st.title("CampusRAG")
     st.caption("校园制度与通知问答")
 
-    options, document_errors = load_filter_options()
-    if document_errors:
-        st.warning(f"有 {len(document_errors)} 个本地文件无法解析，已跳过；问答界面仍可使用已有索引。")
-        with st.expander("查看无法解析的文件"):
-            for error in document_errors:
-                st.write(error)
+    options = load_filter_options(current_index_version())
     filters = selected_filters(options)
     settings = get_settings()
     if not Path(settings.index_dir).exists():
