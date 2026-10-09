@@ -70,5 +70,5 @@ def get_settings() -> Settings:
             model=_env("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3"),
         ),
         data_dir=os.path.join(base, "data", "raw"),
-        index_dir=os.path.join(base, "chroma_db"),
+        index_dir=_env("CHROMA_DB_DIR", os.path.join(base, "chroma_db_optimized")),
     )

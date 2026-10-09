@@ -40,11 +40,21 @@ def _matches_filters(metadata: Mapping[str, Any], filters: Mapping[str, Any]) ->
     return all(metadata.get(key) == value for key, value in filters.items())
 
 
+def _chroma_where(filters: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Convert simple metadata filters into Chroma's single-operator where shape."""
+    if not filters:
+        return None
+    payload = dict(filters)
+    if len(payload) == 1 or any(key.startswith("$") for key in payload):
+        return payload
+    return {"$and": [{key: value} for key, value in payload.items()]}
+
+
 def _rrf_fuse(
     vector_results: Sequence[SearchResult],
     bm25_results: Sequence[SearchResult],
     top_k: int,
-    rrf_k: int = 60,
+    rrf_k: int = 10,
 ) -> List[SearchResult]:
     """使用 Reciprocal Rank Fusion 合并两份排序，避免比较不同分数尺度。"""
     if top_k < 1:
@@ -82,7 +92,13 @@ def _rrf_fuse(
 class HybridRetriever:
     """针对已建立的 Chroma 索引提供混合检索。"""
 
-    def __init__(self, settings: Settings | None = None):
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        vector_k: int = 20,
+        bm25_k: int = 20,
+        rrf_k: int = 10,
+    ):
         try:
             import chromadb
         except ImportError as exc:
@@ -97,6 +113,9 @@ class HybridRetriever:
             ) from exc
 
         self.settings = settings or get_settings()
+        self.vector_k = vector_k
+        self.bm25_k = bm25_k
+        self.rrf_k = rrf_k
         self.embedder = EmbeddingClient(self.settings.embedding)
         client = chromadb.PersistentClient(path=self.settings.index_dir)
         existing = {collection.name for collection in client.list_collections()}
@@ -127,16 +146,16 @@ class HybridRetriever:
         query: str,
         top_k: int = 5,
         filters: Mapping[str, Any] | None = None,
-        vector_k: int = 20,
-        bm25_k: int = 20,
+        vector_k: int | None = None,
+        bm25_k: int | None = None,
     ) -> List[SearchResult]:
         """执行两路召回并返回 RRF 融合后的结果。"""
         return self.search_with_trace(
             query,
             top_k=top_k,
             filters=filters,
-            vector_k=vector_k,
-            bm25_k=bm25_k,
+            vector_k=vector_k if vector_k is not None else self.vector_k,
+            bm25_k=bm25_k if bm25_k is not None else self.bm25_k,
         ).fused_results
 
     def search_with_trace(
@@ -144,18 +163,22 @@ class HybridRetriever:
         query: str,
         top_k: int = 5,
         filters: Mapping[str, Any] | None = None,
-        vector_k: int = 20,
-        bm25_k: int = 20,
+        vector_k: int | None = None,
+        bm25_k: int | None = None,
+        rrf_k: int | None = None,
     ) -> RetrievalTrace:
         """执行混合召回，并保留每一路的中间结果供诊断。"""
         if not query.strip():
             raise ValueError("查询不能为空。")
-        if top_k < 1 or vector_k < 1 or bm25_k < 1:
-            raise ValueError("top_k、vector_k 和 bm25_k 必须大于 0。")
+        vector_k = vector_k if vector_k is not None else self.vector_k
+        bm25_k = bm25_k if bm25_k is not None else self.bm25_k
+        rrf_k = rrf_k if rrf_k is not None else self.rrf_k
+        if top_k < 1 or vector_k < 1 or bm25_k < 1 or rrf_k < 1:
+            raise ValueError("top_k、vector_k、bm25_k 和 rrf_k 必须大于 0。")
         active_filters = dict(filters or {})
         vector_results = self._vector_search(query, vector_k, active_filters)
         bm25_results = self._bm25_search(query, bm25_k, active_filters)
-        fused_results = _rrf_fuse(vector_results, bm25_results, top_k)
+        fused_results = _rrf_fuse(vector_results, bm25_results, top_k, rrf_k=rrf_k)
         return RetrievalTrace(vector_results, bm25_results, fused_results)
 
     def _vector_search(
@@ -170,7 +193,7 @@ class HybridRetriever:
         response = self.collection.query(
             query_embeddings=[self.embedder.embed_query(query)],
             n_results=min(limit, count),
-            where=dict(filters) or None,
+            where=_chroma_where(filters),
             include=["documents", "metadatas", "distances"],
         )
         return [

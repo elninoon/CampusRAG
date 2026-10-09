@@ -11,13 +11,13 @@
 - 支持按 `year`、`category`、`department` 等元数据精确筛选。
 - 使用 SiliconFlow Rerank API 对候选结果精排。
 - 使用 DeepSeek 生成受资料约束的回答，并校验回答中的 `[n]` 引用是否指向真实来源。
-- 提供 Hit@K 离线检索评测和单元测试。
+- 网页聊天界面和 MCP 问答支持多轮追问：用近期对话解析指代并改写检索问题，回答仍以检索来源为事实依据。
 
 ## 流程
 
 ```text
 原始文档 -> 解析 -> 结构化切分 -> Embedding -> Chroma 索引
-用户问题 -> 向量召回 + BM25 召回 -> RRF -> Rerank -> LLM 回答 + 来源
+用户问题 + 对话历史 -> 追问改写 -> 向量召回 + BM25 召回 -> RRF -> Rerank -> LLM 回答 + 来源
 ```
 
 ## 快速开始
@@ -90,12 +90,6 @@ python -m streamlit run app.py
 python scripts\search.py "奖学金材料什么时候提交" --year 2026 --category 奖学金
 ```
 
-排查错误回答时，查看向量召回、BM25、RRF 融合和 Rerank 的完整链路：
-
-```powershell
-python scripts\trace_query.py "华东师范大学的副校长是谁"
-```
-
 ## MCP 工具服务
 
 CampusRAG 可以作为 MCP Server 暴露给外部 Agent，例如 CampusOps Agent。启动方式：
@@ -110,6 +104,7 @@ python scripts\mcp_server.py
 - `campus_rag_ask`：执行完整 RAGPipeline，返回受资料约束的回答、来源和引用校验结果。
 
 工具参数支持 `year`、`category`、`department` 等 metadata 过滤。推荐在 Agent 里优先用 `campus_rag_search` 查证据；需要完整自然语言回答时再调用 `campus_rag_ask`。
+`campus_rag_ask` 还接受可选的 `history`（按时间顺序排列的 `{"role":"user"|"assistant","content":"..."}` 消息数组）；调用方需在每轮把已有对话传入。网页聊天界面会自动保留当前会话的历史。历史只用于理解追问指代，不作为事实证据。
 
 ## 数据格式
 
@@ -147,28 +142,15 @@ year: 2026
 
 `source_path`、`format` 和 `document_id` 由解析器自动生成。PDF 会优先提取文本层；如果整份文件几乎没有可提取文字，则自动尝试 Tesseract OCR。扫描版中文 PDF 需要系统安装 Tesseract 及 `chi_sim` 中文语言包。
 
-## 评测与测试
+## 运行前准备
 
-`data/eval/retrieval_cases.json` 保存人工标注的查询和目标文档。运行检索评测：
-
-```powershell
-python scripts\evaluate.py --top-k 5
-```
-
-运行全部单元测试：
-
-```powershell
-python -m unittest discover -s tests -v
-```
-
-Hit@K 衡量正确文档是否出现在前 K 个检索结果中。它用于发现召回问题，不等同于回答正确率。
+校园原始资料、评测集和本地 Chroma 索引不随代码仓库上传。请将自己的资料放入 `data/raw/`，配置 `.env` 中的 DeepSeek 与 SiliconFlow API Key，然后运行 `python scripts\build_index.py` 建立索引。后续可以通过命令行、Streamlit 界面或 MCP 接口使用问答系统。
 
 ## 项目结构
 
 ```text
 config.py                 模型、路径和环境变量配置
-data/raw/                 原始校园资料
-data/eval/                检索评测样本
+data/raw/                 本地原始校园资料（不上传）
 src/parser.py             多格式文档解析
 src/web_ingestor.py       通用单网页正文提取与 Markdown 入库
 src/chunker.py            文档切分
@@ -178,11 +160,9 @@ src/retriever.py          向量 + BM25 混合检索
 src/reranker.py           SiliconFlow 精排
 src/generator.py          受约束回答生成
 src/citations.py          引用编号校验
-src/evaluator.py          Hit@K 评测
 src/pipeline.py           端到端问答入口
 src/mcp_server.py         CampusRAG MCP 工具服务
-scripts/                  建库、检索、问答和评测命令
-tests/                    不依赖外部 API 的单元测试
+scripts/                  建库、检索、问答和数据接入命令
 ```
 
 ## 设计说明

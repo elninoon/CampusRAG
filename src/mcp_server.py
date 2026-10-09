@@ -91,11 +91,12 @@ def campus_rag_search(
 @mcp.tool()
 def campus_rag_ask(
     question: str,
+    history: List[Dict[str, str]] | None = None,
     year: int | None = None,
     category: str = "",
     department: str = "",
-    retrieval_k: int = 12,
-    rerank_k: int = 5,
+    retrieval_k: int = 8,
+    rerank_k: int = 3,
 ) -> Dict[str, Any]:
     """基于校园资料回答问题，并返回答案、来源和引用校验结果。
 
@@ -103,6 +104,7 @@ def campus_rag_ask(
     """
     answer = _pipeline().ask(
         question=question,
+        history=history,
         filters=_filters(year=year, category=category, department=department),
         retrieval_k=retrieval_k,
         rerank_k=rerank_k,

@@ -1,6 +1,6 @@
 """阶段 6：基于带来源的检索上下文生成受约束回答。"""
 from dataclasses import dataclass
-from typing import Any, List, Sequence
+from typing import Any, List, Mapping, Sequence
 
 from config import LLMConfig
 from src.citations import CitationCheck, validate_citations
@@ -60,7 +60,65 @@ class AnswerGenerator:
         self._client = OpenAI(api_key=config.api_key, base_url=config.base_url)
         self._model = config.model
 
-    def generate(self, question: str, results: Sequence[SearchResult]) -> GeneratedAnswer:
+    @staticmethod
+    def _history_text(history: Sequence[Mapping[str, str]] | None) -> str:
+        """Format a bounded conversation history for reference resolution only."""
+        if not history:
+            return ""
+        turns = []
+        for message in history[-8:]:
+            role = message.get("role")
+            content = message.get("content")
+            if role not in {"user", "assistant"} or not isinstance(content, str):
+                continue
+            content = content.strip()
+            if content:
+                turns.append(f"{role}: {content[:1200]}")
+        return "\n".join(turns)
+
+    def rewrite_question(
+        self,
+        question: str,
+        history: Sequence[Mapping[str, str]],
+    ) -> str:
+        """Resolve references in a follow-up without adding facts."""
+        history_text = self._history_text(history)
+        if not history_text:
+            return question.strip()
+
+        response = self._client.chat.completions.create(
+            model=self._model,
+            temperature=0,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "你负责把用户的追问改写成可独立检索的问题。结合对话历史解析“它、这个、那项”等指代，"
+                        "保留当前问题询问的内容，不要回答问题，不要补充历史中没有的事实。"
+                        "如果历史无法明确指代对象，原样返回当前问题。只输出一条问题，不要解释或加引号。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"对话历史：\n{history_text}\n\n"
+                        f"当前追问：{question.strip()}\n\n独立问题："
+                    ),
+                },
+            ],
+        )
+        standalone = response.choices[0].message.content
+        if not standalone or not standalone.strip():
+            raise RuntimeError("追问改写未返回有效问题，请重试。")
+        return standalone.strip().strip('"“”')
+
+    def generate(
+        self,
+        question: str,
+        results: Sequence[SearchResult],
+        history: Sequence[Mapping[str, str]] | None = None,
+        standalone_question: str | None = None,
+    ) -> GeneratedAnswer:
         if not question.strip():
             raise ValueError("问题不能为空。")
         if not results:
@@ -68,6 +126,13 @@ class AnswerGenerator:
             return GeneratedAnswer(text, [], validate_citations(text, 0))
 
         context = build_context(results)
+        history_text = self._history_text(history)
+        history_context = (
+            f"对话历史（只用于理解当前问题的指代，不作为事实依据）：\n{history_text}\n\n"
+            if history_text
+            else ""
+        )
+        resolved_question = standalone_question or question
         response = self._client.chat.completions.create(
             model=self._model,
             temperature=0.1,
@@ -75,7 +140,12 @@ class AnswerGenerator:
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {
                     "role": "user",
-                    "content": f"资料：\n{context}\n\n问题：{question}",
+                    "content": (
+                        f"{history_context}资料：\n{context}\n\n"
+                        f"用户当前问题：{question}\n"
+                        f"用于检索的独立问题：{resolved_question}\n"
+                        "请回答用户当前问题。"
+                    ),
                 },
             ],
         )

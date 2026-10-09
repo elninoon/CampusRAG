@@ -63,21 +63,56 @@ class IndexBuilder:
             raise RuntimeError(
                 "缺少 chromadb 依赖，请先执行：python -m pip install -r requirements.txt"
             ) from exc
+        self._collection_not_found_error = chromadb.errors.NotFoundError
         self.settings = settings or get_settings()
         self.batch_size = batch_size
         self.embedder = EmbeddingClient(self.settings.embedding, batch_size=batch_size)
         self.client = chromadb.PersistentClient(path=self.settings.index_dir)
 
-    def build(self, strategy: str = "structured", reset: bool = False) -> IndexResult:
+    def build(
+        self,
+        strategy: str = "structured",
+        reset: bool = False,
+        max_chars: int = 800,
+        overlap: int = 40,
+        chunk_size: int = 500,
+        chunk_overlap: int = 50,
+    ) -> IndexResult:
         docs = load_directory(self.settings.data_dir)
-        chunks = chunk_documents(docs, strategy=strategy)
+        return self.build_documents(
+            docs,
+            strategy=strategy,
+            reset=reset,
+            max_chars=max_chars,
+            overlap=overlap,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
+
+    def build_documents(
+        self,
+        docs: List[Document],
+        strategy: str = "structured",
+        reset: bool = False,
+        max_chars: int = 800,
+        overlap: int = 40,
+        chunk_size: int = 500,
+        chunk_overlap: int = 50,
+    ) -> IndexResult:
+        """Build an index from explicit documents, useful for isolated experiments."""
+        chunk_kwargs = (
+            {"max_chars": max_chars, "overlap": overlap}
+            if strategy == "structured"
+            else {"chunk_size": chunk_size, "overlap": chunk_overlap}
+        )
+        chunks = chunk_documents(docs, strategy=strategy, **chunk_kwargs)
         if not chunks:
             raise RuntimeError(f"数据目录中没有可索引的内容: {self.settings.data_dir}")
 
         if reset:
             try:
                 self.client.delete_collection(COLLECTION_NAME)
-            except ValueError:
+            except (ValueError, self._collection_not_found_error):
                 pass
         collection = self.client.get_or_create_collection(
             name=COLLECTION_NAME,

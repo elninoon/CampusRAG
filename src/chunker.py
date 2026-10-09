@@ -97,8 +97,10 @@ def _bounded_parts(text: str, max_chars: int, overlap: int = 80) -> List[str]:
     return parts
 
 
-def structured_chunk(doc: Document, max_chars: int = 1200) -> List[Document]:
+def structured_chunk(doc: Document, max_chars: int = 800, overlap: int = 40) -> List[Document]:
     """结构化切分：每个 chunk = 文档标题 + 一级标题 + 正文。"""
+    if overlap < 0:
+        raise ValueError("overlap 不能小于 0。")
     title = doc.metadata.get("title") or doc.text.splitlines()[0].strip()
     sections = _split_sections(doc.text)
     chunks: List[Document] = []
@@ -107,7 +109,7 @@ def structured_chunk(doc: Document, max_chars: int = 1200) -> List[Document]:
         for sub_head, sub_body in _sub_split(heading, body):
             prefix = f"{title}\n\n{sub_head}\n"
             body_limit = max_chars - len(prefix)
-            for part_index, part in enumerate(_bounded_parts(sub_body, body_limit)):
+            for part_index, part in enumerate(_bounded_parts(sub_body, body_limit, overlap=overlap)):
                 chunks.append(Document(
                     text=f"{prefix}{part}".strip(),
                     metadata={
@@ -122,6 +124,8 @@ def structured_chunk(doc: Document, max_chars: int = 1200) -> List[Document]:
 
 def naive_chunk(doc: Document, chunk_size: int = 500, overlap: int = 50) -> List[Document]:
     """固定长度 + 重叠的 baseline 切分，用于对照实验。"""
+    if chunk_size < 1 or overlap < 0 or overlap >= chunk_size:
+        raise ValueError("chunk_size 必须大于 0，且 overlap 必须在 [0, chunk_size) 范围内。")
     text = doc.text
     chunks: List[Document] = []
     start = 0

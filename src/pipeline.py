@@ -1,6 +1,6 @@
 """阶段 7：串联混合检索、精排和受约束回答生成。"""
 from dataclasses import dataclass, replace
-from typing import Any, Dict, List, Mapping
+from typing import Any, Dict, List, Mapping, Sequence
 
 from config import Settings, get_settings
 from src.generator import AnswerGenerator, GeneratedAnswer
@@ -48,10 +48,14 @@ class RAGPipeline:
         self,
         question: str,
         filters: Mapping[str, Any] | None = None,
-        retrieval_k: int = 12,
-        rerank_k: int = 5,
+        retrieval_k: int = 8,
+        rerank_k: int = 3,
+        history: Sequence[Mapping[str, str]] | None = None,
     ) -> GeneratedAnswer:
-        retrieval_query = expand_retrieval_query(question)
+        standalone_question = question
+        if history:
+            standalone_question = self.generator.rewrite_question(question, history)
+        retrieval_query = expand_retrieval_query(standalone_question)
         retrieval_trace = self.retriever.search_with_trace(
             retrieval_query,
             top_k=retrieval_k,
@@ -64,7 +68,15 @@ class RAGPipeline:
             retrieval_trace.fused_results,
             top_n=rerank_k,
         )
-        answer = self.generator.generate(question, ranked)
+        if history:
+            answer = self.generator.generate(
+                question,
+                ranked,
+                history=history,
+                standalone_question=standalone_question,
+            )
+        else:
+            answer = self.generator.generate(question, ranked)
         trace = QueryTrace(
             original_query=question,
             retrieval_query=retrieval_query,

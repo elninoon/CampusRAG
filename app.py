@@ -168,6 +168,12 @@ def main() -> None:
     if not question:
         return
 
+    history = [
+        {"role": message["role"], "content": message["content"]}
+        for message in st.session_state.messages
+        if message.get("role") in {"user", "assistant"}
+        and isinstance(message.get("content"), str)
+    ]
     user_message = {"role": "user", "content": question}
     st.session_state.messages.append(user_message)
     render_message(user_message)
@@ -175,7 +181,11 @@ def main() -> None:
     with st.chat_message("assistant"):
         with st.spinner("正在检索资料并组织回答..."):
             try:
-                answer = get_pipeline(current_index_version()).ask(question, filters=filters)
+                answer = get_pipeline(current_index_version()).ask(
+                    question,
+                    filters=filters,
+                    history=history,
+                )
             except (RuntimeError, ValueError) as exc:
                 st.error(str(exc))
                 return

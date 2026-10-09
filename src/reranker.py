@@ -24,7 +24,7 @@ class Reranker:
         self,
         query: str,
         candidates: Sequence[SearchResult],
-        top_n: int = 5,
+        top_n: int = 3,
     ) -> List[SearchResult]:
         if not query.strip():
             raise ValueError("查询不能为空。")

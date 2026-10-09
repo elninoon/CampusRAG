@@ -4,8 +4,28 @@ __pycache__/
 .venv/
 venv/
 chroma_db/
+chroma_db_optimized/
 *.db
 .DS_Store
 面经.md
 INTERVIEW_GUIDE.md
 PY_FILES.md
+
+# Local source documents and generated indexes; provide your own corpus locally.
+/data/raw/*
+!/data/raw/.gitkeep
+/data/eval/
+
+# Evaluation, tuning, and test-only code/artifacts are kept locally.
+/scripts/evaluate.py
+/scripts/trace_query.py
+/scripts/demo.py
+/scripts/tune_parameters.py
+/scripts/tune_generation_depth.py
+/scripts/validate_tuned_config.py
+/src/evaluator.py
+/tests/
+
+# Personal reports and local copies.
+/PROJECT_REPORT_RESUME.md
+/README copy.md
